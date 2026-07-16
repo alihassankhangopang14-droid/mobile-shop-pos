@@ -11,6 +11,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime, date
 import streamlit.components.v1 as components
+import urllib.parse
 
 # ============================================================
 # PAGE CONFIG
@@ -281,6 +282,39 @@ def show_receipt(title, client, phone, item_desc, price, extra=""):
     components.html(receipt_html, height=420, scrolling=True)
 
 # ============================================================
+# WHATSAPP MESSAGE BUILDER
+# ============================================================
+def build_repair_whatsapp_message(customer_name, device_model, fault_description,
+                                    estimated_cost, advance_paid, balance):
+    message = (
+        f"السلام علیکم محترم کسٹمر!\n\n"
+        f"*علی موبائلز اینڈ کمیونیکیشن* 📱\n"
+        f"آپ کا موبائل ریپیئرنگ آرڈر درج کر لیا گیا ہے۔\n\n"
+        f"👤 *گاہک:* {customer_name}\n"
+        f"📱 *موبائل ماڈل:* {device_model}\n"
+        f"🛠️ *خرابی/مسئلہ:* {fault_description}\n"
+        f"💰 *کل ریٹ:* PKR {estimated_cost:,.0f}\n"
+        f"💵 *ایڈوانس رقم:* PKR {advance_paid:,.0f}\n"
+        f"🔴 *بقایا رقم:* PKR {balance:,.0f}\n\n"
+        f"⚠️ *نوٹ:* موبائل کھولتے وقت اگر کوئی اضافی خرابی نکلی تو اس کے چارجز اوپر دی گئی رقم میں شامل نہیں ہوں گے اور علیحدہ سے لاگو ہوں گے۔\n\n"
+        f"شکریہ! جیسے ہی آپ کا فون تیار ہوگا، آپ کو مطلع کر دیا جائے گا۔"
+    )
+    return message
+
+def whatsapp_send_link(phone, message):
+    """Builds a wa.me deep link. Returns None if phone number looks invalid."""
+    digits = "".join(ch for ch in str(phone) if ch.isdigit())
+    if not digits:
+        return None
+    # Convert local Pakistani numbers (03xx...) to international format (923xx...)
+    if digits.startswith("0"):
+        digits = "92" + digits[1:]
+    elif not digits.startswith("92"):
+        digits = "92" + digits
+    encoded_message = urllib.parse.quote(message)
+    return f"https://wa.me/{digits}?text={encoded_message}"
+
+# ============================================================
 # SIDEBAR NAVIGATION
 # ============================================================
 st.sidebar.markdown("### 📱 Ali Mobiles")
@@ -463,6 +497,25 @@ elif page == "🛠️ ریپیرنگ کھاتہ":
                     "advance_paid": r_advance, "delivery_date": r_delivery
                 })
                 st.success("ریپیرنگ کا آرڈر کامیابی سے درج ہو گیا ہے!")
+                st.session_state["last_repair_wa"] = {
+                    "customer_name": r_name, "customer_phone": r_phone, "device_model": r_model,
+                    "fault_description": r_fault, "estimated_cost": r_cost,
+                    "advance_paid": r_advance, "balance": r_cost - r_advance
+                }
+
+    if st.session_state.get("last_repair_wa"):
+        d = st.session_state["last_repair_wa"]
+        msg = build_repair_whatsapp_message(
+            d["customer_name"], d["device_model"], d["fault_description"],
+            d["estimated_cost"], d["advance_paid"], d["balance"]
+        )
+        link = whatsapp_send_link(d["customer_phone"], msg)
+        if link:
+            st.link_button("💬 کسٹمر کو واٹس ایپ پیغام بھیجیں", link, use_container_width=True)
+            st.caption("بٹن دبانے سے واٹس ایپ کھلے گا، پیغام پہلے سے لکھا ہوگا — بس Send پر ٹیپ کریں۔")
+        if st.button("بند کریں ✖️", key="close_last_wa"):
+            st.session_state["last_repair_wa"] = None
+            st.rerun()
 
     st.markdown("---")
     st.markdown("##### ریپیرنگ آرڈرز کی لسٹ (Active Jobs)")
@@ -488,7 +541,7 @@ elif page == "🛠️ ریپیرنگ کھاتہ":
                 label, css_class = status_map.get(row['repair_status'], ("نامعلوم", "status-pending"))
                 c5.markdown(f'<span class="{css_class}">{label}</span>', unsafe_allow_html=True)
 
-                b1, b2, b3, b4 = st.columns(4)
+                b1, b2, b3, b4, b5 = st.columns(5)
                 if row['repair_status'] == 'Pending':
                     if b1.button("تیار کریں", key=f"ready_{row['id']}"):
                         update_repair_status(row['id'], 'Ready')
@@ -499,9 +552,22 @@ elif page == "🛠️ ریپیرنگ کھاتہ":
                         st.rerun()
                 if b3.button("🖨️ رسید", key=f"rprint_{row['id']}"):
                     st.session_state[f"show_rprint_{row['id']}"] = True
-                if b4.button("🗑️ حذف کریں", key=f"rdel_{row['id']}"):
+                if b4.button("💬 واٹس ایپ", key=f"rwa_{row['id']}"):
+                    st.session_state[f"show_rwa_{row['id']}"] = True
+                if b5.button("🗑️ حذف کریں", key=f"rdel_{row['id']}"):
                     delete_repair(row['id'])
                     st.rerun()
+
+                if st.session_state.get(f"show_rwa_{row['id']}"):
+                    wa_msg = build_repair_whatsapp_message(
+                        row['customer_name'], row['device_model'], row['fault_description'],
+                        row['estimated_cost'], row['advance_paid'], row['balance']
+                    )
+                    wa_link = whatsapp_send_link(row['customer_phone'], wa_msg)
+                    if wa_link:
+                        st.link_button("💬 واٹس ایپ پر بھیجیں", wa_link, use_container_width=True)
+                    else:
+                        st.warning("موبائل نمبر درست نہیں لگ رہا۔")
 
                 if st.session_state.get(f"show_rprint_{row['id']}"):
                     show_receipt(
