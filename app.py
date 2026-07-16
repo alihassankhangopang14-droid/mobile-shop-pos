@@ -38,21 +38,57 @@ st.markdown("""
         text-align: right;
     }
     .main-header {
-        background: linear-gradient(135deg, #0a1a3a 0%, #1e3a6e 100%);
-        padding: 20px 30px;
-        border-radius: 12px;
-        border: 1px solid #c9a227;
-        margin-bottom: 20px;
+        background: linear-gradient(135deg, #0a1a3a 0%, #1e3a6e 55%, #3a1e6e 100%);
+        padding: 26px 30px;
+        border-radius: 14px;
+        border: 2px solid #f5d67e;
+        margin-bottom: 18px;
+        text-align: center;
     }
     .main-header h1 {
         color: #f5d67e;
         margin: 0;
-        font-size: 28px;
+        font-size: 40px;
+        font-weight: 900;
+        letter-spacing: 0.5px;
+        text-shadow: 0 2px 8px rgba(0,0,0,0.5);
     }
-    .main-header p {
-        color: #cfd8e3;
-        margin: 4px 0 0 0;
-        font-size: 13px;
+    .main-header .header-sub {
+        color: #ffffff;
+        margin: 8px 0 0 0;
+        font-size: 16px;
+        font-weight: 600;
+    }
+    h2, h3 { font-weight: 800 !important; }
+    div[data-testid="stMetricValue"] {
+        font-size: 26px !important;
+        font-weight: 800 !important;
+    }
+    div[data-testid="stMetricLabel"] {
+        font-size: 14px !important;
+        font-weight: 700 !important;
+    }
+    .stButton > button {
+        font-weight: 700;
+        font-size: 15px;
+        border-radius: 10px;
+        padding: 10px 0;
+    }
+    .nav-tile {
+        border-radius: 14px;
+        padding: 22px 10px 14px 10px;
+        text-align: center;
+        margin-bottom: 6px;
+    }
+    .nav-tile-icon {
+        font-size: 42px;
+        line-height: 1;
+    }
+    .nav-tile-label {
+        color: #ffffff;
+        font-size: 19px;
+        font-weight: 800;
+        margin-top: 8px;
     }
     .metric-card {
         background: #101a2e;
@@ -362,32 +398,69 @@ def whatsapp_send_link(phone, message):
 # ============================================================
 # SIDEBAR NAVIGATION
 # ============================================================
+# ============================================================
+# SESSION STATE FOR NAVIGATION
+# ============================================================
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "dashboard"
+
+# ============================================================
+# SIDEBAR (shop info only — navigation lives on the main page)
+# ============================================================
 st.sidebar.markdown("### 📱 Ali Mobiles")
 st.sidebar.caption("& Communication")
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Proprietor:** علی حسن (Ali Hassan)")
 st.sidebar.markdown("📞 0302-9401314")
 st.sidebar.markdown("📍 Shamsabad, Rawalpindi")
-st.sidebar.markdown("---")
 
-page = st.sidebar.radio(
-    "مینیو",
-    ["📊 ڈیش بورڈ", "➕ نیا موبائل خریدیں", "💵 موبائل فروخت کریں", "📋 انوینٹری",
-     "🛠️ ریپیرنگ کھاتہ", "💰 ایزی پیسہ/کھاتہ"],
-    label_visibility="collapsed"
-)
-
+# ============================================================
+# BIG COLORFUL HEADER
+# ============================================================
 st.markdown("""
 <div class="main-header">
-    <h1>📱 Ali Mobiles & Communication</h1>
-    <p>موبائل شاپ POS سسٹم — انوینٹری، ریپیرنگ، اور کھاتہ بک</p>
+    <h1>📱 علی موبائلز اینڈ کمیونیکیشن</h1>
+    <p class="header-sub">Ali Mobiles &amp; Communication — مکمل موبائل شاپ POS سسٹم</p>
 </div>
 """, unsafe_allow_html=True)
 
 # ============================================================
+# BIG TILE MENU — always visible on the front page, no sidebar needed
+# ============================================================
+NAV_ITEMS = [
+    ("dashboard", "📊", "ڈیش بورڈ", "#1e3a6e"),
+    ("purchase", "➕", "خریداری", "#0a5c36"),
+    ("sell", "💵", "فروخت کریں", "#8a4b00"),
+    ("inventory", "📋", "انوینٹری", "#5c1e6e"),
+    ("repair", "🛠️", "ریپیرنگ کھاتہ", "#7a1f1f"),
+    ("cashbook", "💰", "ایزی پیسہ/کھاتہ", "#1f6e5c"),
+]
+
+row1 = st.columns(3)
+row2 = st.columns(3)
+tile_cols = row1 + row2
+for col, (key, icon, label, color) in zip(tile_cols, NAV_ITEMS):
+    with col:
+        is_active = st.session_state.current_page == key
+        border = "3px solid #f5d67e" if is_active else "1px solid #26324a"
+        st.markdown(f"""
+            <div class="nav-tile" style="background:{color}; border:{border};">
+                <div class="nav-tile-icon">{icon}</div>
+                <div class="nav-tile-label">{label}</div>
+            </div>
+        """, unsafe_allow_html=True)
+        if st.button("کھولیں ⬆️", key=f"navbtn_{key}", use_container_width=True):
+            st.session_state.current_page = key
+            st.rerun()
+
+st.markdown("---")
+
+page = st.session_state.current_page
+
+# ============================================================
 # PAGE: DASHBOARD
 # ============================================================
-if page == "📊 ڈیش بورڈ":
+if page == "dashboard":
     st.subheader("ڈیش بورڈ سمری")
     stats = get_stats()
     c1, c2, c3, c4 = st.columns(4)
@@ -415,7 +488,7 @@ if page == "📊 ڈیش بورڈ":
 # ============================================================
 # PAGE: PURCHASE / ADD MOBILE
 # ============================================================
-elif page == "➕ نیا موبائل خریدیں":
+elif page == "purchase":
     st.subheader("موبائل خریداری فارم")
     with st.form("purchase_form", clear_on_submit=True):
         st.markdown("**👤 کسٹمر کی معلومات**")
@@ -470,7 +543,7 @@ elif page == "➕ نیا موبائل خریدیں":
 # ============================================================
 # PAGE: SELL MOBILE (dedicated sell flow)
 # ============================================================
-elif page == "💵 موبائل فروخت کریں":
+elif page == "sell":
     st.subheader("موبائل فروخت کریں")
 
     sale_mode = st.radio(
@@ -575,7 +648,7 @@ elif page == "💵 موبائل فروخت کریں":
 # ============================================================
 # PAGE: INVENTORY
 # ============================================================
-elif page == "📋 انوینٹری":
+elif page == "inventory":
     st.subheader("موبائل انوینٹری اور اسٹاک")
 
     if st.session_state.get("last_sale_wa"):
@@ -654,7 +727,7 @@ elif page == "📋 انوینٹری":
 # ============================================================
 # PAGE: REPAIRING LEDGER
 # ============================================================
-elif page == "🛠️ ریپیرنگ کھاتہ":
+elif page == "repair":
     st.subheader("🛠️ موبائل ریپیرنگ ریکارڈ اندراج")
 
     with st.form("repair_form", clear_on_submit=True):
@@ -765,7 +838,7 @@ elif page == "🛠️ ریپیرنگ کھاتہ":
 # ============================================================
 # PAGE: CASHBOOK
 # ============================================================
-elif page == "💰 ایزی پیسہ/کھاتہ":
+elif page == "cashbook":
     st.subheader("💰 آمدن و اخراجات کا اندراج")
 
     col1, col2 = st.columns([1, 2])
