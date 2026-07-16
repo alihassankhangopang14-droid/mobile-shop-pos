@@ -1,0 +1,562 @@
+# -*- coding: utf-8 -*-
+"""
+Ali Mobiles & Communication - Super POS System
+یہ ایک مکمل موبائل شاپ POS سسٹم ہے جس میں انوینٹری، سیلز، ریپیرنگ کھاتہ،
+ایزی پیسہ/جاز کیش کیش بک، اور پرنٹ ایبل رسید شامل ہیں۔
+Run: streamlit run app.py
+"""
+
+import streamlit as st
+import sqlite3
+import pandas as pd
+from datetime import datetime, date
+import streamlit.components.v1 as components
+
+# ============================================================
+# PAGE CONFIG
+# ============================================================
+st.set_page_config(
+    page_title="Ali Mobiles & Communication - POS",
+    page_icon="📱",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+DB_FILE = "ali_mobiles_pos.db"
+
+# ============================================================
+# CUSTOM CSS (RTL support + Navy/Gold Theme)
+# ============================================================
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu&display=swap');
+
+    .urdu-text {
+        font-family: 'Noto Nastaliq Urdu', sans-serif;
+        direction: rtl;
+        text-align: right;
+    }
+    .main-header {
+        background: linear-gradient(135deg, #0a1a3a 0%, #1e3a6e 100%);
+        padding: 20px 30px;
+        border-radius: 12px;
+        border: 1px solid #c9a227;
+        margin-bottom: 20px;
+    }
+    .main-header h1 {
+        color: #f5d67e;
+        margin: 0;
+        font-size: 28px;
+    }
+    .main-header p {
+        color: #cfd8e3;
+        margin: 4px 0 0 0;
+        font-size: 13px;
+    }
+    .metric-card {
+        background: #101a2e;
+        border: 1px solid #26324a;
+        border-radius: 10px;
+        padding: 16px;
+        text-align: center;
+    }
+    div[data-testid="stMetricValue"] {
+        color: #f5d67e;
+    }
+    .status-pending { background:#4a3b00; color:#ffd85e; padding:3px 10px; border-radius:12px; font-size:12px; }
+    .status-ready { background:#00304a; color:#5ec9ff; padding:3px 10px; border-radius:12px; font-size:12px; }
+    .status-delivered { background:#0a3d1f; color:#6fe08a; padding:3px 10px; border-radius:12px; font-size:12px; }
+    .receipt-box {
+        background: white;
+        color: black;
+        padding: 25px;
+        border-radius: 8px;
+        max-width: 420px;
+        margin: auto;
+        font-family: 'Noto Nastaliq Urdu', sans-serif;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================
+# DATABASE LAYER
+# ============================================================
+def get_conn():
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS mobiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_name TEXT, customer_cnic TEXT, customer_phone TEXT,
+            brand TEXT, model TEXT, imei1 TEXT UNIQUE, imei2 TEXT,
+            condition TEXT, purchase_price REAL, selling_price REAL,
+            status TEXT DEFAULT 'Available',
+            actual_selling_price REAL DEFAULT 0,
+            buyer_name TEXT, buyer_phone TEXT,
+            purchase_date TEXT, sale_date TEXT
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS repairs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_name TEXT, customer_phone TEXT,
+            device_model TEXT, fault_description TEXT,
+            estimated_cost REAL, advance_paid REAL, balance REAL,
+            delivery_date TEXT, repair_status TEXT DEFAULT 'Pending',
+            created_at TEXT
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS cashbook (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT, amount REAL, description TEXT, entry_date TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# ------------------ Mobiles (Inventory) ------------------
+def add_mobile(data):
+    conn = get_conn()
+    try:
+        conn.execute("""
+            INSERT INTO mobiles (customer_name, customer_cnic, customer_phone, brand, model,
+                imei1, imei2, condition, purchase_price, selling_price, status,
+                actual_selling_price, purchase_date)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (data['customer_name'], data['customer_cnic'], data['customer_phone'],
+              data['brand'], data['model'], data['imei1'], data['imei2'], data['condition'],
+              data['purchase_price'], data['selling_price'], 'Available', 0,
+              datetime.now().strftime("%Y-%m-%d %H:%M")))
+        conn.commit()
+        return True, "سٹاک ریکارڈ محفوظ ہو گیا ہے!"
+    except sqlite3.IntegrityError:
+        return False, "خرابی: یہ IMEI پہلے سے انوینٹری میں موجود ہے!"
+    finally:
+        conn.close()
+
+def get_inventory():
+    conn = get_conn()
+    df = pd.read_sql_query("SELECT * FROM mobiles ORDER BY id DESC", conn)
+    conn.close()
+    return df
+
+def sell_mobile(mobile_id, actual_price, buyer_name, buyer_phone):
+    conn = get_conn()
+    conn.execute("""
+        UPDATE mobiles SET status='Sold', actual_selling_price=?, buyer_name=?, buyer_phone=?, sale_date=?
+        WHERE id=?
+    """, (actual_price, buyer_name, buyer_phone, datetime.now().strftime("%Y-%m-%d %H:%M"), mobile_id))
+    conn.commit()
+    conn.close()
+
+def delete_mobile(mobile_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM mobiles WHERE id=?", (mobile_id,))
+    conn.commit()
+    conn.close()
+
+# ------------------ Repairs ------------------
+def add_repair(data):
+    balance = data['estimated_cost'] - data['advance_paid']
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO repairs (customer_name, customer_phone, device_model, fault_description,
+            estimated_cost, advance_paid, balance, delivery_date, repair_status, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+    """, (data['customer_name'], data['customer_phone'], data['device_model'],
+          data['fault_description'], data['estimated_cost'], data['advance_paid'],
+          balance, str(data['delivery_date']), 'Pending',
+          datetime.now().strftime("%Y-%m-%d %H:%M")))
+    conn.commit()
+    conn.close()
+
+def get_repairs():
+    conn = get_conn()
+    df = pd.read_sql_query("SELECT * FROM repairs ORDER BY id DESC", conn)
+    conn.close()
+    return df
+
+def update_repair_status(repair_id, status):
+    conn = get_conn()
+    conn.execute("UPDATE repairs SET repair_status=? WHERE id=?", (status, repair_id))
+    conn.commit()
+    conn.close()
+
+def delete_repair(repair_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM repairs WHERE id=?", (repair_id,))
+    conn.commit()
+    conn.close()
+
+# ------------------ Cashbook ------------------
+def add_cash_entry(entry_type, amount, description):
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO cashbook (type, amount, description, entry_date) VALUES (?,?,?,?)
+    """, (entry_type, amount, description, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    conn.commit()
+    conn.close()
+
+def get_cashbook():
+    conn = get_conn()
+    df = pd.read_sql_query("SELECT * FROM cashbook ORDER BY id DESC", conn)
+    conn.close()
+    return df
+
+def delete_cash_entry(entry_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM cashbook WHERE id=?", (entry_id,))
+    conn.commit()
+    conn.close()
+
+# ------------------ Dashboard Stats ------------------
+def get_stats():
+    inv = get_inventory()
+    rep = get_repairs()
+    cash = get_cashbook()
+
+    stock_value = inv[inv['status'] == 'Available']['purchase_price'].sum() if not inv.empty else 0
+    total_items = len(inv[inv['status'] == 'Available']) if not inv.empty else 0
+    total_sales = inv[inv['status'] == 'Sold']['actual_selling_price'].sum() if not inv.empty else 0
+    sales_profit = (inv[inv['status'] == 'Sold']['actual_selling_price'] -
+                     inv[inv['status'] == 'Sold']['purchase_price']).sum() if not inv.empty else 0
+
+    active_repairs = len(rep[rep['repair_status'] != 'Delivered']) if not rep.empty else 0
+    repair_revenue = rep[rep['repair_status'] == 'Delivered']['estimated_cost'].sum() if not rep.empty else 0
+
+    if not cash.empty:
+        easypaisa_in = cash[cash['type'].str.contains('CashIn', na=False)]['amount'].sum()
+        easypaisa_out = cash[cash['type'].str.contains('CashOut', na=False)]['amount'].sum()
+        expenses = cash[cash['type'] == 'Shop Expense']['amount'].sum()
+    else:
+        easypaisa_in = easypaisa_out = expenses = 0
+
+    total_profit = sales_profit + repair_revenue - expenses
+
+    return {
+        "total_items": total_items, "stock_value": stock_value, "total_sales": total_sales,
+        "total_profit": total_profit, "active_repairs": active_repairs,
+        "repair_revenue": repair_revenue, "easypaisa_balance": easypaisa_in - easypaisa_out,
+        "expenses": expenses
+    }
+
+# ============================================================
+# PRINTABLE RECEIPT COMPONENT
+# ============================================================
+def show_receipt(title, client, phone, item_desc, price, extra=""):
+    receipt_html = f"""
+    <div class="receipt-box" id="receipt">
+        <div style="text-align:center; border-bottom:1px solid #ccc; padding-bottom:12px; margin-bottom:12px;">
+            <h2 style="margin:0;">Ali Mobiles & Communication</h2>
+            <p style="font-size:11px; color:#666; margin:2px 0;">Dhok Kala Khan, Shamsabad, Rawalpindi</p>
+            <p style="font-size:11px; color:#666; margin:2px 0;">Phone: 0302-9401314</p>
+        </div>
+        <p style="text-align:center; font-weight:bold; text-decoration:underline;">{title}</p>
+        <p><b>گاہک کا نام:</b> {client}</p>
+        <p><b>موبائل نمبر:</b> {phone}</p>
+        <p><b>تفصیل:</b> {item_desc}</p>
+        {f"<p><b>اضافی معلومات:</b> {extra}</p>" if extra else ""}
+        <p style="text-align:right; font-weight:bold; font-size:16px; border-top:1px solid #ccc; padding-top:8px;">
+            کل رقم: PKR {price:,.0f}
+        </p>
+        <p style="text-align:center; font-size:11px; color:#888; font-style:italic;">
+            آنے کا شکریہ! خریداری یا مرمت شدہ موبائل کی وارنٹی چیک کریں۔
+        </p>
+    </div>
+    <div style="text-align:center; margin-top:10px;">
+        <button onclick="window.print()"
+            style="background:#1e3a6e; color:white; border:none; padding:8px 20px; border-radius:6px; cursor:pointer;">
+            🖨️ پرنٹ کریں
+        </button>
+    </div>
+    """
+    components.html(receipt_html, height=420, scrolling=True)
+
+# ============================================================
+# SIDEBAR NAVIGATION
+# ============================================================
+st.sidebar.markdown("### 📱 Ali Mobiles")
+st.sidebar.caption("& Communication")
+st.sidebar.markdown("---")
+st.sidebar.markdown("**Proprietor:** علی حسن (Ali Hassan)")
+st.sidebar.markdown("📞 0302-9401314")
+st.sidebar.markdown("📍 Shamsabad, Rawalpindi")
+st.sidebar.markdown("---")
+
+page = st.sidebar.radio(
+    "مینیو",
+    ["📊 ڈیش بورڈ", "➕ نیا موبائل خریدیں", "📋 انوینٹری", "🛠️ ریپیرنگ کھاتہ", "💰 ایزی پیسہ/کھاتہ"],
+    label_visibility="collapsed"
+)
+
+st.markdown("""
+<div class="main-header">
+    <h1>📱 Ali Mobiles & Communication</h1>
+    <p>موبائل شاپ POS سسٹم — انوینٹری، ریپیرنگ، اور کھاتہ بک</p>
+</div>
+""", unsafe_allow_html=True)
+
+# ============================================================
+# PAGE: DASHBOARD
+# ============================================================
+if page == "📊 ڈیش بورڈ":
+    st.subheader("ڈیش بورڈ سمری")
+    stats = get_stats()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("کل فروخت (Sales)", f"PKR {stats['total_sales']:,.0f}")
+    c2.metric("موجودہ اسٹاک مالیت", f"PKR {stats['stock_value']:,.0f}")
+    c3.metric("خالص منافع (+ ریپیرنگ)", f"PKR {stats['total_profit']:,.0f}")
+    c4.metric("زیرِ کار ریپیرنگ", f"{stats['active_repairs']} Devices")
+
+    c5, c6, c7 = st.columns(3)
+    c5.metric("موجودہ اسٹاک تعداد", f"{stats['total_items']} Items")
+    c6.metric("ایزی پیسہ/جاز کیش بیلنس", f"PKR {stats['easypaisa_balance']:,.0f}")
+    c7.metric("کل اخراجات", f"PKR {stats['expenses']:,.0f}")
+
+    st.markdown("---")
+    st.markdown("##### حالیہ ریپیرنگ آرڈرز")
+    rep = get_repairs()
+    if not rep.empty:
+        st.dataframe(
+            rep[['customer_name', 'device_model', 'repair_status', 'balance', 'delivery_date']].head(5),
+            use_container_width=True, hide_index=True
+        )
+    else:
+        st.info("ابھی کوئی ریپیرنگ ریکارڈ موجود نہیں۔")
+
+# ============================================================
+# PAGE: PURCHASE / ADD MOBILE
+# ============================================================
+elif page == "➕ نیا موبائل خریدیں":
+    st.subheader("موبائل خریداری فارم")
+    with st.form("purchase_form", clear_on_submit=True):
+        st.markdown("**👤 کسٹمر کی معلومات**")
+        c1, c2, c3 = st.columns(3)
+        customer_name = c1.text_input("کسٹمر کا نام *")
+        customer_cnic = c2.text_input("شناختی کارڈ (CNIC)")
+        customer_phone = c3.text_input("موبائل نمبر *")
+
+        st.markdown("**📱 موبائل تفصیلات**")
+        c4, c5 = st.columns(2)
+        brand = c4.text_input("برانڈ *")
+        model = c5.text_input("ماڈل *")
+        c6, c7 = st.columns(2)
+        imei1 = c6.text_input("IMEI 1 *")
+        imei2 = c7.text_input("IMEI 2")
+        c8, c9, c10 = st.columns(3)
+        condition = c8.selectbox("حالت", ["New", "Used"])
+        purchase_price = c9.number_input("خرید قیمت (Purchase Price)", min_value=0.0, step=100.0)
+        selling_price = c10.number_input("فروخت قیمت (Asking Price)", min_value=0.0, step=100.0)
+
+        submitted = st.form_submit_button("محفوظ کریں (Save Purchase)", use_container_width=True)
+        if submitted:
+            if not customer_name or not customer_phone or not brand or not model or not imei1:
+                st.error("براہ کرم تمام لازمی خانے (*) پُر کریں۔")
+            else:
+                ok, msg = add_mobile({
+                    "customer_name": customer_name, "customer_cnic": customer_cnic,
+                    "customer_phone": customer_phone, "brand": brand, "model": model,
+                    "imei1": imei1, "imei2": imei2, "condition": condition,
+                    "purchase_price": purchase_price, "selling_price": selling_price
+                })
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+
+# ============================================================
+# PAGE: INVENTORY
+# ============================================================
+elif page == "📋 انوینٹری":
+    st.subheader("موبائل انوینٹری اور اسٹاک")
+    inv = get_inventory()
+
+    if inv.empty:
+        st.info("ابھی انوینٹری میں کوئی موبائل موجود نہیں۔")
+    else:
+        for _, row in inv.iterrows():
+            with st.container(border=True):
+                c1, c2, c3, c4, c5 = st.columns([2, 2, 2, 1.5, 2])
+                c1.markdown(f"**{row['customer_name'] or 'N/A'}**")
+                c1.caption(row['customer_phone'])
+                c2.markdown(f"**{row['brand']} {row['model']}**")
+                c2.caption(f"IMEI: {row['imei1']}")
+                c3.markdown(f"خرید: PKR {row['purchase_price']:,.0f}")
+                if row['status'] == 'Sold':
+                    c3.markdown(f"فروخت: PKR {row['actual_selling_price']:,.0f}")
+
+                status_class = "status-delivered" if row['status'] == 'Sold' else "status-ready"
+                status_label = "فروخت شدہ" if row['status'] == 'Sold' else "دستیاب"
+                c4.markdown(f'<span class="{status_class}">{status_label}</span>', unsafe_allow_html=True)
+
+                with c5:
+                    b1, b2, b3 = st.columns(3)
+                    if row['status'] == 'Available':
+                        if b1.button("بیچیں", key=f"sell_{row['id']}"):
+                            st.session_state[f"show_sell_{row['id']}"] = True
+                    if b2.button("🖨️", key=f"print_{row['id']}"):
+                        st.session_state[f"show_print_{row['id']}"] = True
+                    if b3.button("🗑️", key=f"del_{row['id']}"):
+                        delete_mobile(row['id'])
+                        st.rerun()
+
+                if st.session_state.get(f"show_sell_{row['id']}"):
+                    with st.form(f"sell_form_{row['id']}"):
+                        st.markdown("**موبائل فروخت کریں**")
+                        actual_price = st.number_input("فروخت کی رقم", min_value=0.0,
+                                                         value=float(row['selling_price'] or 0))
+                        buyer_name = st.text_input("خریدار کا نام")
+                        buyer_phone = st.text_input("خریدار کا موبائل نمبر")
+                        colA, colB = st.columns(2)
+                        if colA.form_submit_button("بیچ دیں ✅"):
+                            sell_mobile(row['id'], actual_price, buyer_name, buyer_phone)
+                            st.session_state[f"show_sell_{row['id']}"] = False
+                            st.success("فروخت مکمل ہوگئی!")
+                            st.rerun()
+                        if colB.form_submit_button("منسوخ کریں"):
+                            st.session_state[f"show_sell_{row['id']}"] = False
+                            st.rerun()
+
+                if st.session_state.get(f"show_print_{row['id']}"):
+                    show_receipt(
+                        "موبائل فروخت کی رسید", row['customer_name'], row['customer_phone'],
+                        f"{row['brand']} {row['model']}",
+                        row['actual_selling_price'] if row['status'] == 'Sold' else row['selling_price']
+                    )
+
+# ============================================================
+# PAGE: REPAIRING LEDGER
+# ============================================================
+elif page == "🛠️ ریپیرنگ کھاتہ":
+    st.subheader("🛠️ موبائل ریپیرنگ ریکارڈ اندراج")
+
+    with st.form("repair_form", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        r_name = c1.text_input("کسٹمر کا نام *")
+        r_phone = c2.text_input("فون نمبر *")
+        r_model = c3.text_input("موبائل اور ماڈل *")
+
+        r_fault = st.text_area("موبائل کا مسئلہ / خرابی *",
+                                placeholder="مثال کے طور پر: ایل سی ڈی ٹوٹ گئی ہے، چارجنگ پورٹ خراب ہے")
+
+        c4, c5, c6 = st.columns(3)
+        r_cost = c4.number_input("کل ریٹ طے شدہ *", min_value=0.0, step=100.0)
+        r_advance = c5.number_input("ایڈوانس رقم جمع شدہ", min_value=0.0, step=50.0)
+        r_delivery = c6.date_input("کب تک لینے آئے گا؟", value=date.today())
+
+        submitted = st.form_submit_button("محفوظ کریں اور رسید تیار کریں", use_container_width=True)
+        if submitted:
+            if not r_name or not r_phone or not r_model or not r_fault or r_cost <= 0:
+                st.error("براہ کرم تمام لازمی خانے (*) پُر کریں۔")
+            else:
+                add_repair({
+                    "customer_name": r_name, "customer_phone": r_phone, "device_model": r_model,
+                    "fault_description": r_fault, "estimated_cost": r_cost,
+                    "advance_paid": r_advance, "delivery_date": r_delivery
+                })
+                st.success("ریپیرنگ کا آرڈر کامیابی سے درج ہو گیا ہے!")
+
+    st.markdown("---")
+    st.markdown("##### ریپیرنگ آرڈرز کی لسٹ (Active Jobs)")
+
+    rep = get_repairs()
+    if rep.empty:
+        st.info("ابھی کوئی ریپیرنگ ریکارڈ موجود نہیں۔")
+    else:
+        status_map = {"Pending": ("کام ہو رہا ہے", "status-pending"),
+                      "Ready": ("تیار ہے", "status-ready"),
+                      "Delivered": ("گاہک لے گیا", "status-delivered")}
+        for _, row in rep.iterrows():
+            with st.container(border=True):
+                c1, c2, c3, c4, c5 = st.columns([2, 2.5, 1.5, 1.5, 2.5])
+                c1.markdown(f"**{row['customer_name']}**")
+                c1.caption(row['customer_phone'])
+                c2.markdown(f"**{row['device_model']}**")
+                c2.caption(row['fault_description'])
+                c3.markdown(f"⏰ {row['delivery_date']}")
+                c4.markdown(f"کل: {row['estimated_cost']:,.0f}")
+                c4.markdown(f"بقایا: {row['balance']:,.0f}")
+
+                label, css_class = status_map.get(row['repair_status'], ("نامعلوم", "status-pending"))
+                c5.markdown(f'<span class="{css_class}">{label}</span>', unsafe_allow_html=True)
+
+                b1, b2, b3, b4 = st.columns(4)
+                if row['repair_status'] == 'Pending':
+                    if b1.button("تیار کریں", key=f"ready_{row['id']}"):
+                        update_repair_status(row['id'], 'Ready')
+                        st.rerun()
+                if row['repair_status'] == 'Ready':
+                    if b2.button("حوالہ کیا", key=f"delivered_{row['id']}"):
+                        update_repair_status(row['id'], 'Delivered')
+                        st.rerun()
+                if b3.button("🖨️ رسید", key=f"rprint_{row['id']}"):
+                    st.session_state[f"show_rprint_{row['id']}"] = True
+                if b4.button("🗑️ حذف کریں", key=f"rdel_{row['id']}"):
+                    delete_repair(row['id'])
+                    st.rerun()
+
+                if st.session_state.get(f"show_rprint_{row['id']}"):
+                    show_receipt(
+                        "موبائل ریپیرنگ رسید", row['customer_name'], row['customer_phone'],
+                        f"{row['device_model']} ({row['fault_description']})",
+                        row['estimated_cost'],
+                        extra=f"ایڈوانس: {row['advance_paid']:,.0f} | بقایا: {row['balance']:,.0f}"
+                    )
+
+# ============================================================
+# PAGE: CASHBOOK
+# ============================================================
+elif page == "💰 ایزی پیسہ/کھاتہ":
+    st.subheader("💰 آمدن و اخراجات کا اندراج")
+
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        with st.form("cash_form", clear_on_submit=True):
+            cash_type = st.selectbox("ٹائپ سلیکٹ کریں", [
+                "Shop Expense", "EasyPaisa CashIn", "EasyPaisa CashOut",
+                "JazzCash CashIn", "JazzCash CashOut"
+            ], format_func=lambda x: {
+                "Shop Expense": "اخراجات (Shop Expense)",
+                "EasyPaisa CashIn": "ایزی پیسہ کیش ان",
+                "EasyPaisa CashOut": "ایزی پیسہ کیش آؤٹ",
+                "JazzCash CashIn": "جاز کیش کیش ان",
+                "JazzCash CashOut": "جاز کیش کیش آؤٹ",
+            }[x])
+            amount = st.number_input("رقم (Amount)", min_value=0.0, step=50.0)
+            description = st.text_input("تفصیل / ریمارکس", placeholder="مثلاً: چائے کا خرچہ یا دکان کا کرایہ")
+            if st.form_submit_button("محفوظ کریں", use_container_width=True):
+                if amount <= 0 or not description:
+                    st.error("رقم اور تفصیل درج کریں۔")
+                else:
+                    add_cash_entry(cash_type, amount, description)
+                    st.success("ٹرانزیکشن ریکارڈ کر دی گئی ہے!")
+                    st.rerun()
+
+    with col2:
+        st.markdown("##### لین دین کی ہسٹری (Transaction History)")
+        cash = get_cashbook()
+        if cash.empty:
+            st.info("ابھی کوئی ٹرانزیکشن موجود نہیں۔")
+        else:
+            for _, row in cash.iterrows():
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([2, 2, 1])
+                    color = "🔴" if row['type'] == 'Shop Expense' else "🟢"
+                    c1.markdown(f"{color} **{row['type']}**")
+                    c1.caption(row['description'])
+                    c2.markdown(f"**PKR {row['amount']:,.0f}**")
+                    c2.caption(row['entry_date'])
+                    if c3.button("🗑️", key=f"cdel_{row['id']}"):
+                        delete_cash_entry(row['id'])
+                        st.rerun()
+
+st.markdown("---")
+st.caption("Ali Mobiles & Communication — Super POS System | Built with Streamlit")
