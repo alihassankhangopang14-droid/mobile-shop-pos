@@ -90,6 +90,22 @@ st.markdown("""
         font-weight: 800;
         margin-top: 8px;
     }
+    /* Big colorful clickable nav tiles (the first two horizontal blocks on the page) */
+    div[data-testid="stHorizontalBlock"]:nth-of-type(-n+2) button {
+        min-height: 100px;
+        font-size: 21px !important;
+        font-weight: 800 !important;
+        border-radius: 16px !important;
+        color: #ffffff !important;
+        border: 2px solid rgba(255,255,255,0.25) !important;
+        white-space: pre-line !important;
+    }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1) div[data-testid="column"]:nth-of-type(1) button { background:#1e3a6e !important; }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1) div[data-testid="column"]:nth-of-type(2) button { background:#0a5c36 !important; }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1) div[data-testid="column"]:nth-of-type(3) button { background:#8a4b00 !important; }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) div[data-testid="column"]:nth-of-type(1) button { background:#5c1e6e !important; }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) div[data-testid="column"]:nth-of-type(2) button { background:#7a1f1f !important; }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) div[data-testid="column"]:nth-of-type(3) button { background:#1f6e5c !important; }
     .metric-card {
         background: #101a2e;
         border: 1px solid #26324a;
@@ -428,28 +444,20 @@ st.markdown("""
 # BIG TILE MENU — always visible on the front page, no sidebar needed
 # ============================================================
 NAV_ITEMS = [
-    ("dashboard", "📊", "ڈیش بورڈ", "#1e3a6e"),
-    ("purchase", "➕", "خریداری", "#0a5c36"),
-    ("sell", "💵", "فروخت کریں", "#8a4b00"),
-    ("inventory", "📋", "انوینٹری", "#5c1e6e"),
-    ("repair", "🛠️", "ریپیرنگ کھاتہ", "#7a1f1f"),
-    ("cashbook", "💰", "ایزی پیسہ/کھاتہ", "#1f6e5c"),
+    ("dashboard", "📊\nڈیش بورڈ"),
+    ("purchase", "➕\nخریداری"),
+    ("sell", "💵\nفروخت کریں"),
+    ("inventory", "📋\nانوینٹری"),
+    ("repair", "🛠️\nریپیرنگ کھاتہ"),
+    ("cashbook", "💰\nایزی پیسہ/کھاتہ"),
 ]
 
 row1 = st.columns(3)
 row2 = st.columns(3)
 tile_cols = row1 + row2
-for col, (key, icon, label, color) in zip(tile_cols, NAV_ITEMS):
+for col, (key, label) in zip(tile_cols, NAV_ITEMS):
     with col:
-        is_active = st.session_state.current_page == key
-        border = "3px solid #f5d67e" if is_active else "1px solid #26324a"
-        st.markdown(f"""
-            <div class="nav-tile" style="background:{color}; border:{border};">
-                <div class="nav-tile-icon">{icon}</div>
-                <div class="nav-tile-label">{label}</div>
-            </div>
-        """, unsafe_allow_html=True)
-        if st.button("کھولیں ⬆️", key=f"navbtn_{key}", use_container_width=True):
+        if st.button(label, key=f"navbtn_{key}", use_container_width=True):
             st.session_state.current_page = key
             st.rerun()
 
