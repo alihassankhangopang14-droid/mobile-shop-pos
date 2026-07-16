@@ -164,6 +164,25 @@ def delete_mobile(mobile_id):
     conn.commit()
     conn.close()
 
+def add_direct_sale(data):
+    """Adds and immediately marks as sold a mobile that was NOT previously in inventory
+    (e.g. a phone brought in by someone else, sold on the spot)."""
+    conn = get_conn()
+    imei = data['imei1'].strip() if data.get('imei1') else ""
+    if not imei:
+        imei = f"DIRECT-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    conn.execute("""
+        INSERT INTO mobiles (customer_name, customer_cnic, customer_phone, brand, model,
+            imei1, imei2, condition, purchase_price, selling_price, status,
+            actual_selling_price, buyer_name, buyer_phone, purchase_date, sale_date)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, ("", "", "", data['brand'], data['model'], imei, "", data['condition'],
+          data['cost_price'], data['selling_price'], 'Sold', data['selling_price'],
+          data['buyer_name'], data['buyer_phone'], now, now))
+    conn.commit()
+    conn.close()
+
 # ------------------ Repairs ------------------
 def add_repair(data):
     balance = data['estimated_cost'] - data['advance_paid']
@@ -353,7 +372,8 @@ st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
     "مینیو",
-    ["📊 ڈیش بورڈ", "➕ نیا موبائل خریدیں", "📋 انوینٹری", "🛠️ ریپیرنگ کھاتہ", "💰 ایزی پیسہ/کھاتہ"],
+    ["📊 ڈیش بورڈ", "➕ نیا موبائل خریدیں", "💵 موبائل فروخت کریں", "📋 انوینٹری",
+     "🛠️ ریپیرنگ کھاتہ", "💰 ایزی پیسہ/کھاتہ"],
     label_visibility="collapsed"
 )
 
@@ -445,6 +465,111 @@ elif page == "➕ نیا موبائل خریدیں":
             st.caption("بٹن دبانے سے واٹس ایپ کھلے گا، پیغام پہلے سے لکھا ہوگا — بس Send پر ٹیپ کریں۔")
         if st.button("بند کریں ✖️", key="close_purchase_wa"):
             st.session_state["last_purchase_wa"] = None
+            st.rerun()
+
+# ============================================================
+# PAGE: SELL MOBILE (dedicated sell flow)
+# ============================================================
+elif page == "💵 موبائل فروخت کریں":
+    st.subheader("موبائل فروخت کریں")
+
+    sale_mode = st.radio(
+        "پہلے یہ بتائیں:",
+        ["📦 اسٹاک میں سے بیچ رہا ہوں (پہلے سے خریدا ہوا موبائل)",
+         "🆕 نیا / باہر کا موبائل بیچ رہا ہوں (اسٹاک میں شامل نہیں)"]
+    )
+    st.markdown("---")
+
+    # ---------- MODE 1: SELL FROM EXISTING INVENTORY ----------
+    if sale_mode.startswith("📦"):
+        inv = get_inventory()
+        avail = inv[inv['status'] == 'Available'] if not inv.empty else inv
+
+        if avail.empty:
+            st.info("ابھی اسٹاک میں کوئی موبائل دستیاب نہیں۔ پہلے 'نیا موبائل خریدیں' سے اندراج کریں۔")
+        else:
+            options = {
+                f"{row['brand']} {row['model']} — IMEI: {row['imei1']} (خرید قیمت: PKR {row['purchase_price']:,.0f})": row['id']
+                for _, row in avail.iterrows()
+            }
+            choice_label = st.selectbox("کون سا موبائل بیچ رہے ہیں؟", list(options.keys()))
+            selected_id = options[choice_label]
+            selected_row = avail[avail['id'] == selected_id].iloc[0]
+
+            with st.form("stock_sell_form", clear_on_submit=True):
+                st.markdown(f"**منتخب موبائل:** {selected_row['brand']} {selected_row['model']}")
+                actual_price = st.number_input(
+                    "فروخت کی رقم *", min_value=0.0, step=100.0,
+                    value=float(selected_row['selling_price'] or 0)
+                )
+                buyer_name = st.text_input("خریدار کا نام *")
+                buyer_phone = st.text_input("خریدار کا موبائل نمبر *")
+
+                submitted = st.form_submit_button("بیچ دیں ✅", use_container_width=True)
+                if submitted:
+                    if not buyer_name or not buyer_phone or actual_price <= 0:
+                        st.error("براہ کرم تمام لازمی خانے (*) پُر کریں۔")
+                    else:
+                        profit = actual_price - selected_row['purchase_price']
+                        sell_mobile(selected_id, actual_price, buyer_name, buyer_phone)
+                        st.success(f"فروخت مکمل ہوگئی! خالص منافع: PKR {profit:,.0f}")
+                        st.session_state["last_sale_wa"] = {
+                            "buyer_name": buyer_name, "buyer_phone": buyer_phone,
+                            "brand": selected_row['brand'], "model": selected_row['model'],
+                            "price": actual_price
+                        }
+
+    # ---------- MODE 2: DIRECT SALE (NOT IN INVENTORY) ----------
+    else:
+        with st.form("direct_sale_form", clear_on_submit=True):
+            st.markdown("**📱 موبائل کی تفصیل**")
+            c1, c2 = st.columns(2)
+            d_brand = c1.text_input("برانڈ *")
+            d_model = c2.text_input("ماڈل *")
+            c3, c4 = st.columns(2)
+            d_imei = c3.text_input("IMEI (اختیاری)")
+            d_condition = c4.selectbox("حالت", ["New", "Used"])
+
+            st.markdown("**💰 رقم کی تفصیل**")
+            c5, c6 = st.columns(2)
+            d_cost = c5.number_input("آپ کی خرید/لاگت قیمت (Cost Price) *", min_value=0.0, step=100.0)
+            d_price = c6.number_input("فروخت کی رقم (Selling Price) *", min_value=0.0, step=100.0)
+
+            st.markdown("**👤 خریدار کی معلومات**")
+            c7, c8 = st.columns(2)
+            d_buyer_name = c7.text_input("خریدار کا نام *")
+            d_buyer_phone = c8.text_input("خریدار کا موبائل نمبر *")
+
+            submitted = st.form_submit_button("فروخت محفوظ کریں ✅", use_container_width=True)
+            if submitted:
+                if not d_brand or not d_model or not d_buyer_name or not d_buyer_phone or d_price <= 0:
+                    st.error("براہ کرم تمام لازمی خانے (*) پُر کریں۔")
+                else:
+                    profit = d_price - d_cost
+                    add_direct_sale({
+                        "brand": d_brand, "model": d_model, "imei1": d_imei, "condition": d_condition,
+                        "cost_price": d_cost, "selling_price": d_price,
+                        "buyer_name": d_buyer_name, "buyer_phone": d_buyer_phone
+                    })
+                    st.success(f"فروخت محفوظ ہو گئی! خالص منافع: PKR {profit:,.0f}")
+                    st.session_state["last_sale_wa"] = {
+                        "buyer_name": d_buyer_name, "buyer_phone": d_buyer_phone,
+                        "brand": d_brand, "model": d_model, "price": d_price
+                    }
+
+    # ---------- SHOW WHATSAPP BUTTON AFTER EITHER MODE ----------
+    if st.session_state.get("last_sale_wa"):
+        d = st.session_state["last_sale_wa"]
+        wa_msg = build_sale_whatsapp_message(d["buyer_name"], d["brand"], d["model"], d["price"])
+        wa_link = whatsapp_send_link(d["buyer_phone"], wa_msg)
+        st.markdown("---")
+        if wa_link:
+            st.link_button("💬 خریدار کو تصدیقی پیغام بھیجیں", wa_link, use_container_width=True)
+            st.caption("بٹن دبانے سے واٹس ایپ کھلے گا، پیغام پہلے سے لکھا ہوگا — بس Send پر ٹیپ کریں۔")
+        else:
+            st.warning("خریدار کا موبائل نمبر درست نہیں لگ رہا۔")
+        if st.button("بند کریں ✖️", key="close_sale_wa_dedicated"):
+            st.session_state["last_sale_wa"] = None
             st.rerun()
 
 # ============================================================
