@@ -301,6 +301,32 @@ def build_repair_whatsapp_message(customer_name, device_model, fault_description
     )
     return message
 
+def build_purchase_whatsapp_message(customer_name, brand, model, purchase_price):
+    message = (
+        f"السلام علیکم محترم!\n\n"
+        f"*علی موبائلز اینڈ کمیونیکیشن* 📱\n"
+        f"یہ تصدیق ہے کہ آپ نے اپنا موبائل ہمیں فروخت کیا ہے۔\n\n"
+        f"👤 *فروخت کنندہ:* {customer_name}\n"
+        f"📱 *موبائل:* {brand} {model}\n"
+        f"💰 *وصول شدہ رقم:* PKR {purchase_price:,.0f}\n"
+        f"📅 *تاریخ:* {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+        f"شکریہ! علی موبائلز اینڈ کمیونیکیشن پر بھروسہ کرنے کا شکریہ۔"
+    )
+    return message
+
+def build_sale_whatsapp_message(buyer_name, brand, model, price):
+    message = (
+        f"السلام علیکم محترم کسٹمر!\n\n"
+        f"*علی موبائلز اینڈ کمیونیکیشن* 📱\n"
+        f"یہ تصدیق ہے کہ آپ نے یہ موبائل ہم سے خریدا ہے۔\n\n"
+        f"👤 *خریدار:* {buyer_name}\n"
+        f"📱 *موبائل:* {brand} {model}\n"
+        f"💰 *ادا شدہ رقم:* PKR {price:,.0f}\n"
+        f"📅 *تاریخ:* {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+        f"شکریہ! خریداری کی رسید محفوظ رکھیں۔ کسی بھی مسئلے کی صورت میں رابطہ کریں۔"
+    )
+    return message
+
 def whatsapp_send_link(phone, message):
     """Builds a wa.me deep link. Returns None if phone number looks invalid."""
     digits = "".join(ch for ch in str(phone) if ch.isdigit())
@@ -403,14 +429,44 @@ elif page == "➕ نیا موبائل خریدیں":
                 })
                 if ok:
                     st.success(msg)
+                    st.session_state["last_purchase_wa"] = {
+                        "customer_name": customer_name, "customer_phone": customer_phone,
+                        "brand": brand, "model": model, "purchase_price": purchase_price
+                    }
                 else:
                     st.error(msg)
+
+    if st.session_state.get("last_purchase_wa"):
+        d = st.session_state["last_purchase_wa"]
+        msg = build_purchase_whatsapp_message(d["customer_name"], d["brand"], d["model"], d["purchase_price"])
+        link = whatsapp_send_link(d["customer_phone"], msg)
+        if link:
+            st.link_button("💬 فروخت کنندہ کو تصدیقی پیغام بھیجیں", link, use_container_width=True)
+            st.caption("بٹن دبانے سے واٹس ایپ کھلے گا، پیغام پہلے سے لکھا ہوگا — بس Send پر ٹیپ کریں۔")
+        if st.button("بند کریں ✖️", key="close_purchase_wa"):
+            st.session_state["last_purchase_wa"] = None
+            st.rerun()
 
 # ============================================================
 # PAGE: INVENTORY
 # ============================================================
 elif page == "📋 انوینٹری":
     st.subheader("موبائل انوینٹری اور اسٹاک")
+
+    if st.session_state.get("last_sale_wa"):
+        d = st.session_state["last_sale_wa"]
+        msg = build_sale_whatsapp_message(d["buyer_name"], d["brand"], d["model"], d["price"])
+        link = whatsapp_send_link(d["buyer_phone"], msg)
+        with st.container(border=True):
+            if link:
+                st.link_button("💬 خریدار کو تصدیقی پیغام بھیجیں", link, use_container_width=True)
+                st.caption("بٹن دبانے سے واٹس ایپ کھلے گا، پیغام پہلے سے لکھا ہوگا — بس Send پر ٹیپ کریں۔")
+            else:
+                st.warning("خریدار کا موبائل نمبر درج نہیں ہوا، میسج نہیں بھیجا جا سکتا۔")
+            if st.button("بند کریں ✖️", key="close_sale_wa"):
+                st.session_state["last_sale_wa"] = None
+                st.rerun()
+
     inv = get_inventory()
 
     if inv.empty:
@@ -453,6 +509,10 @@ elif page == "📋 انوینٹری":
                         if colA.form_submit_button("بیچ دیں ✅"):
                             sell_mobile(row['id'], actual_price, buyer_name, buyer_phone)
                             st.session_state[f"show_sell_{row['id']}"] = False
+                            st.session_state["last_sale_wa"] = {
+                                "buyer_name": buyer_name, "buyer_phone": buyer_phone,
+                                "brand": row['brand'], "model": row['model'], "price": actual_price
+                            }
                             st.success("فروخت مکمل ہوگئی!")
                             st.rerun()
                         if colB.form_submit_button("منسوخ کریں"):
